@@ -7,7 +7,7 @@
             <field name="inherit_id" ref="account.invoice_supplier_form"> </field>
             <field name="arch" type="xml">
                 <xpath expr="//button[@name='invoice_open']" position="before">
-                    <button name="generate_lines" string="Update Prices" type="object"  states="draft" class="default" />
+                    <button name="price_update_wizard" string="Update Prices" type="object"  states="draft" class="default" />
                 </xpath>
             </field>
         </record>

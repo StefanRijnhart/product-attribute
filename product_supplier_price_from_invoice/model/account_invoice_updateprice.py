@@ -2,7 +2,7 @@
 ##############################################################################
 #
 #    OpenERP, Open Source Management Solution
-#    This module copyright (C) 2014 Therp BV (<http://therp.nl>).
+#    This module copyright (C) 2014-2015 Therp BV (<http://therp.nl>).
 #
 #    This program is free software: you can redistribute it and/or modify
 #    it under the terms of the GNU Affero General Public License as
@@ -19,20 +19,54 @@
 #
 ##############################################################################
 from openerp.osv import fields, orm
+from openerp.addons import decimal_precision as dp
 
 
 class Invoice(orm.Model):
     _inherit = 'account.invoice'
 
-    def generate_lines(self, cr, uid, ids, context=None):
+    def _prepare_update_price_wizard_line(
+            self, cr, uid, line, price_wizard_id, context=None):
+        """
+        Return a set of create values for a line in the wizard.
+
+        :param line: invoice line browse record
+        """
+        supplierinfo_obj = self.pool.get('product.supplierinfo')
+        pricelistinfo_obj = self.pool.get('pricelist.partnerinfo')
+        #  get current supplier price
+        info_ids = supplierinfo_obj.search(
+            cr, uid, [
+                ('product_id', '=', line.product_id.product_tmpl_id.id),
+                ('name', '=', line.invoice_id.partner_id.id),
+                ('qty', '=', 1.00)
+                ], context=context)
+        if len(info_ids) > 0:
+            for supplierinfo in supplierinfo_obj.browse(
+                    cr, uid, info_ids, context=context):
+                chosen_pricelist_id = pricelistinfo_obj.search(
+                    cr, uid, [
+                        ('suppinfo_id', '=', supplierinfo.id)
+                        ], context=context)
+                supplier_price = pricelistinfo_obj.browse(
+                    cr, uid, chosen_pricelist_id, context=context)[0].price
+        else:
+            supplier_price = 0
+        return {
+            'updateprice_id': price_wizard_id,
+            'product_id': line.product_id.id,
+            'supplier_price': supplier_price,
+            'invoice_price': line.price_unit,
+            'new_price': 0.0
+            }
+
+    def price_update_wizard(self, cr, uid, ids, context=None):
         """
         Create a wizard and lines on the wizard for all invoice
         lines of this invoice with a product on them.
         """
         invoice = self.pool.get('account.invoice').browse(
             cr, uid, ids[0], context=context)
-        supplierinfo_obj = self.pool.get('product.supplierinfo')
-        pricelistinfo_obj = self.pool.get('pricelist.partnerinfo')
         price_wizard_obj = self.pool.get('account.invoice.updateprice')
         price_wizard_id = price_wizard_obj.create(
             cr, uid, {'account_invoice_id': invoice.id}, context=context)
@@ -44,32 +78,10 @@ class Invoice(orm.Model):
                 ], context=context)
         lines = line_obj.browse(cr, uid, line_ids, context=context)
         for line in lines:
-            #  get current supplier price
-            info_ids = supplierinfo_obj.search(
-                cr, uid, [
-                    ('product_id', '=', line.product_id.product_tmpl_id.id),
-                    ('name', '=', invoice.partner_id.id),
-                    ('qty', '=', 1.00)
-                    ], context=context)
-            if len(info_ids) > 0:
-                for supplierinfo in supplierinfo_obj.browse(cr, uid, info_ids):
-                    chosen_pricelist_id = pricelistinfo_obj.search(
-                        cr, uid, [
-                            ('suppinfo_id', '=', supplierinfo.id)
-                        ], context=context)
-                    supplier_price = pricelistinfo_obj.browse(
-                        cr, uid, chosen_pricelist_id)[0].price
-            else:
-                supplier_price = 0
-            var = {
-                'updateprice_id': price_wizard_id,
-                'product_id': line.product_id.id,
-                'supplier_price': supplier_price,
-                'invoice_price': line.price_unit,
-                'new_price': 0.0
-                }
+            vals = self._prepare_update_price_wizard_line(
+                cr, uid, line, price_wizard_id, context=context)
             self.pool['account.invoice.updateprice.line'].create(
-                cr, uid, var, context=context)
+                cr, uid, vals, context=context)
 
         return {
             'view_mode': 'form',
@@ -89,13 +101,13 @@ class UpdatePriceLine(orm.TransientModel):
         'updateprice_id': fields.many2one('account.invoice.updateprice'),
         'product_id': fields.many2one('product.product', 'Product name'),
         'invoice_price': fields.float(
-            'Invoice price',
+            'Invoice price', digits_compute=dp.get_precision('Account'),
             help="Price you have just received in the invoice"),
         'supplier_price': fields.float(
-            'Supplier price ',
+            'Supplier price ', digits_compute=dp.get_precision('Account'),
             help="Price already saved in your product"),
         'new_price': fields.float(
-            'New price',
+            'New price', digits_compute=dp.get_precision('Account'),
             help="New price you will want to set in the product")
         }
 
@@ -146,7 +158,11 @@ class UpdatePrice(orm.TransientModel):
             'partner_id', 'name', type='char', size=256,
             string='Supplier name', readonly=True),
     }
-    _defaults = {}
+
+    def _prepare_invoice_line_update(
+            self, cr, uid, wizard_line, supplierinfo_id, pricelist_id,
+            context=None):
+        return {'price_unit': wizard_line.new_price}
 
     def save_new_prices(self, cr, uid, ids, context=None):
         wizard = self.browse(cr, uid, ids, context=context)[0]
@@ -160,8 +176,7 @@ class UpdatePrice(orm.TransientModel):
             product = line.product_id
             info_ids = supplierinfo_obj.search(cr, uid, [
                 ('product_id', '=', product.product_tmpl_id.id),
-                ('name', '=',
-                 wizard.partner_id.id),
+                ('name', '=', wizard.partner_id.id),
             ], context=context)
             # supplier exists just change or add pricelists
             if info_ids:
@@ -170,8 +185,7 @@ class UpdatePrice(orm.TransientModel):
                 vals_si = {
                     'product_id': product.product_tmpl_id.id,
                     'name': wizard.partner_id.id,
-                    'min_qty': 1.00,
-                    'delay': 0
+                    'min_qty': 1.0,
                     }
                 supplierinfo_id = supplierinfo_obj.create(
                     cr, uid, vals_si, context=context)
@@ -192,14 +206,14 @@ class UpdatePrice(orm.TransientModel):
             # no pricelists for q=1 exist create new pricelist
             else:
                 vals_pi = {
-                    'name': 'price for ' + str(product.name),
+                    'name': u'price for {}'.format(product.name),
                     'price': line.new_price,
-                    'min_quantity': 1.00,
-                    'qty': 1.00,
+                    'min_quantity': 1,
+                    'qty': 1,
                     'suppinfo_id': supplierinfo_id
                     }
-                pricelistinfo_obj.create(
-                    cr, uid, vals_pi, context=context)
+                pricelist_ids = [pricelistinfo_obj.create(
+                    cr, uid, vals_pi, context=context)]
 
             # Update prices on this invoice's line(s)
             invoice_line_ids = invoiceline_obj.search(
@@ -207,10 +221,11 @@ class UpdatePrice(orm.TransientModel):
                     ('product_id', '=', product.id),
                     ('invoice_id', '=', wizard.account_invoice_id.id),
                     ], context=context)
+            invoice_line_vals = self._prepare_invoice_line_update(
+                cr, uid, line, supplierinfo_id, pricelist_ids[0],
+                context=context)
             invoiceline_obj.write(
-                cr, uid, invoice_line_ids, {
-                    'price_unit': line.new_price
-                    }, context=context)
+                cr, uid, invoice_line_ids, invoice_line_vals, context=context)
 
         return invoice_obj.button_reset_taxes(
             cr, uid, [wizard.account_invoice_id.id], context=context)
