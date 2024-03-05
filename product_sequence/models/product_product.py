@@ -11,8 +11,9 @@ class ProductProduct(models.Model):
     _inherit = "product.product"
 
     default_code = fields.Char(
-        required=True,
-        default="/",
+        # Quatra: default_code not required
+        # required=True,
+        # default="/",
         tracking=True,
         help="Set to '/' and save if you want a new internal reference "
         "to be proposed.",

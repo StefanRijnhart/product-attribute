@@ -11,8 +11,10 @@ def pre_init_hook(cr):
     :param cr: database cursor
     :return: void
     """
-    cr.execute(
-        "UPDATE product_product "
-        "SET default_code = '!!mig!!' || id "
-        "WHERE default_code IS NULL OR default_code = '/';"
-    )
+    # Quatra: disabled
+    return
+    # cr.execute(
+    #     "UPDATE product_product "
+    #     "SET default_code = '!!mig!!' || id "
+    #     "WHERE default_code IS NULL OR default_code = '/';"
+    # )
